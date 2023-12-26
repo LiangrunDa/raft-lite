@@ -1,0 +1,18 @@
+[package]
+name = "raft"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tarpc = { version = "0.33", features = ["full"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tracing = "0.1.37"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+stubborn-io = "0.3"
+tracing-appender = "0.2.2"
+tracing-subscriber = "0.3.17"
+futures = "0.3"
