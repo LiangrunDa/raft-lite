@@ -210,12 +210,13 @@ impl RPCClients {
         }
     }
 
-    pub(crate) async fn log_request(&self, args: LogRequestArgs) {
-        for (_, tx) in self.clients_tx.iter() {
-            tx.send(RpcRequestArgs::LogRequest(args.clone()))
+    pub(crate) async fn log_request(&self, args: LogRequestArgs, idx: u64) {
+        if let Some(tx) = self.clients_tx.get(&idx) {
+            tx.send(RpcRequestArgs::LogRequest(args))
                 .await
                 .expect("rpc_request_tx closed");
         }
+        // TODO: else panic?
     }
 
     pub(crate) async fn vote_request(&self, args: VoteRequestArgs) {

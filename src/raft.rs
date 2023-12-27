@@ -13,6 +13,7 @@ pub struct Raft {
 }
 
 impl Raft {
+    // TODO: initialize two channels for broadcast and application messages
     pub fn new(config: RaftConfig) -> Self {
         Self { config }
     }
