@@ -26,9 +26,15 @@ mod tests {
                 RaftParams::default(),
             );
             let mut raft = Raft::new(config);
-            raft.run();
+            let (mtx, mut mrx) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
+            let (btx, brx) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
+            raft.run(brx, mtx);
             // block forever
-            loop {}
+            loop {
+                // receive message from application
+                let message = mrx.recv().await.unwrap();
+                println!("Received message from application: {:?}", message);
+            }
         });
     }
 }

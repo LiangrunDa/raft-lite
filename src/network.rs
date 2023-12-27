@@ -1,6 +1,7 @@
 use crate::config::RaftConfig;
-use crate::raft_protocol::Event;
+use crate::raft_protocol::{BroadcastArgs, Event};
 use crate::raft_protocol::{LogRequestArgs, LogResponseArgs, VoteRequestArgs, VoteResponseArgs};
+use anyhow::Result;
 use futures::{future, prelude::*};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,9 +13,8 @@ use tarpc::server::Channel;
 use tarpc::tokio_serde::formats::Json;
 use tarpc::{context, server};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, trace, warn};
-use anyhow::Result;
 
 #[derive(Clone)]
 pub(crate) struct RPCServer(pub(crate) Arc<mpsc::Sender<Event>>);
@@ -26,6 +26,8 @@ pub(crate) trait RaftRPC {
     async fn vote_request(args: VoteRequestArgs) -> VoteResponseArgs;
     /// LogRequest RPC
     async fn log_request(args: LogRequestArgs) -> LogResponseArgs;
+    /// Broadcast RPC
+    async fn broadcast(args: BroadcastArgs);
 }
 
 #[tarpc::server]
@@ -51,6 +53,14 @@ impl RaftRPC for RPCServer {
         let res = rx.await.expect("LogResponse channel closed");
         // trace!("Received LogRequest {:?}, and sent LogResponse {:?}", args, res);
         res
+    }
+
+    async fn broadcast(self, _: Context, args: BroadcastArgs) {
+        trace!("Received broadcast: {:?} from peer", args);
+        self.0
+            .send(Event::Broadcast(args.payload))
+            .await
+            .expect("event_tx closed");
     }
 }
 
@@ -78,6 +88,7 @@ pub(crate) async fn start_server(server_addr: &str, event_tx: mpsc::Sender<Event
 pub(crate) enum RpcRequestArgs {
     LogRequest(LogRequestArgs),
     VoteRequest(VoteRequestArgs),
+    ForwardBroadcast(BroadcastArgs, oneshot::Sender<bool>),
 }
 
 pub(crate) struct Connection {
@@ -118,7 +129,6 @@ impl Connection {
     }
 
     pub(crate) async fn handle(&mut self) {
-
         loop {
             let args = self
                 .rpc_request_rx
@@ -126,14 +136,13 @@ impl Connection {
                 .await
                 .expect("rpc_request_rx closed");
 
-            /// The logic is:
-            /// 1. If client_stub is not None, use it to send request
-            /// 1.1 If the request is successful, continue
-            /// 1.2 If the request is failed, set client_stub to None and continue
-            /// 2. If client_stub is None, try to reconnect
-            /// 2.1 If reconnect is successful, continue to send request
-            /// 2.2 If reconnect is failed, go back to next loop
-
+            // The logic is:
+            // 1. If client_stub is not None, use it to send request
+            // 1.1 If the request is successful, continue
+            // 1.2 If the request is failed, set client_stub to None and continue
+            // 2. If client_stub is None, try to reconnect
+            // 2.1 If reconnect is successful, continue to send request
+            // 2.2 If reconnect is failed, go back to next loop
             let client = if let Some(client) = &self.client_stub {
                 client
             } else {
@@ -147,7 +156,11 @@ impl Connection {
                 RpcRequestArgs::LogRequest(args) => {
                     match client.log_request(context::current(), args.clone()).await {
                         Ok(res) => {
-                            trace!("Sent LogRequest {:?} successfully, and received LogResponse {:?}", args, res);
+                            trace!(
+                                "Sent LogRequest {:?} successfully, and received LogResponse {:?}",
+                                args,
+                                res
+                            );
                             self.event_tx
                                 .send(Event::LogResponse(res))
                                 .await
@@ -180,11 +193,28 @@ impl Connection {
                         }
                     }
                 }
+
+                RpcRequestArgs::ForwardBroadcast(args, answer) => {
+                    match client.broadcast(context::current(), args.clone()).await {
+                        Ok(_) => {
+                            trace!("Sent Broadcast {:?} successfully", args);
+                            answer.send(true).expect("answer channel closed");
+                        }
+                        Err(e) => {
+                            warn!("Sent Broadcast {:?} failed: {:?}", args, e);
+                            if e.to_string().contains("shutdown") {
+                                self.client_stub = None;
+                            }
+                            answer.send(false).expect("answer channel closed");
+                        }
+                    }
+                }
             };
         }
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RPCClients {
     pub(crate) clients_tx: Arc<HashMap<u64, mpsc::Sender<RpcRequestArgs>>>,
 }
@@ -225,5 +255,16 @@ impl RPCClients {
                 .await
                 .expect("rpc_request_tx closed");
         }
+    }
+
+    pub(crate) async fn forward_broadcast(&self, args: BroadcastArgs, idx: u64) -> bool {
+        if let Some(tx) = self.clients_tx.get(&idx) {
+            let (answer_tx, answer_rx) = oneshot::channel();
+            tx.send(RpcRequestArgs::ForwardBroadcast(args, answer_tx))
+                .await
+                .expect("rpc_request_tx closed");
+            return answer_rx.await.expect("answer channel closed");
+        }
+        false
     }
 }

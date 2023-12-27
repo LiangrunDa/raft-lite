@@ -1,6 +1,6 @@
-use rand::{Rng, SeedableRng};
-use rand::rngs::{OsRng, StdRng};
 use crate::raft_protocol::Event;
+use rand::rngs::{OsRng, StdRng};
+use rand::{Rng, SeedableRng};
 use tokio::sync::mpsc;
 use tokio::time;
 use tokio::time::Duration;
