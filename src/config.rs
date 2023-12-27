@@ -1,12 +1,15 @@
+use crate::persister::Persister;
+
 #[derive(Clone)]
 pub struct RaftConfig {
     /// vector of ip:port
     pub peers: Vec<String>,
     /// index of self ip in peers
     pub(crate) id: u64,
-
     /// parameters of raft protocol
     pub(crate) params: RaftParams,
+    /// persister implementing trait Persister
+    pub(crate) persister: Box<dyn Persister>, // don't want to make RaftConfig generic so dyn trait is used
 }
 
 #[derive(Clone)]
@@ -26,7 +29,12 @@ impl Default for RaftParams {
 }
 
 impl RaftConfig {
-    pub fn new(mut peers: Vec<String>, self_ip: String, params: RaftParams) -> Self {
+    pub fn new(
+        mut peers: Vec<String>,
+        self_ip: String,
+        params: RaftParams,
+        persister: Box<dyn Persister>,
+    ) -> Self {
         peers.sort();
         // find the index of self_ip in peers, and use it as id
         let idx = match peers.binary_search(&self_ip) {
@@ -34,6 +42,11 @@ impl RaftConfig {
             Err(_) => panic!("Self ip not found in peers!"),
         };
         let id = idx as u64;
-        Self { peers, id, params }
+        Self {
+            peers,
+            id,
+            params,
+            persister,
+        }
     }
 }

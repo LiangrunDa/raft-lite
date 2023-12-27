@@ -7,17 +7,18 @@
 /// need to make all event handlers concurrent, because they need to access the
 /// same node state.
 ///
-
 use crate::config::RaftConfig;
 use crate::network::RPCClients;
+use crate::persister::{PersistRaftState, Persister};
 use crate::raft_log::LogEntry;
+use futures::TryFutureExt;
 use std::cmp::min;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tarpc::serde;
 use tarpc::serde::ser::SerializeStruct;
-use tokio::sync::{mpsc, Mutex, oneshot};
-use tracing::{debug, trace};
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::{debug, error, trace};
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub(crate) enum Role {
@@ -41,13 +42,21 @@ pub(crate) struct NodeState {
 }
 
 impl NodeState {
-    pub(crate) fn new(id: u64, num_peers: usize) -> Self {
+    pub(crate) async fn new(id: u64, num_peers: usize, persister: Box<dyn Persister>) -> Self {
+        let persisted_state = persister
+            .load_raft_state().await.unwrap_or_else(|_| PersistRaftState::default());
+        let PersistRaftState {
+            current_term,
+            voted_for,
+            log,
+            commit_length,
+        } = persisted_state;
         Self {
             id,
-            current_term: 0,
-            voted_for: None,
-            log: Vec::new(),
-            commit_length: 0,
+            current_term,
+            voted_for,
+            log,
+            commit_length,
             current_role: Role::Follower,
             current_leader: None,
             votes_received: HashSet::new(),
@@ -125,7 +134,7 @@ pub(crate) struct RaftProtocol {
 }
 
 impl RaftProtocol {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         config: RaftConfig,
         event_rx: mpsc::Receiver<Event>,
         election_timer_reset_tx: mpsc::Sender<()>,
@@ -136,7 +145,7 @@ impl RaftProtocol {
         let id = config.id;
         Self {
             config: config.clone(),
-            state: NodeState::new(id, config.peers.len()),
+            state: NodeState::new(id, config.peers.len(), config.persister).await,
             election_timer_reset_tx,
             replicate_timer_reset_tx,
             event_rx,
@@ -153,27 +162,52 @@ impl RaftProtocol {
             match event {
                 Event::ElectionTimeout => {
                     self.start_election().await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
                 Event::ReplicationTimeout => {
                     self.handle_replicate_log().await;
                 }
                 Event::VoteRequest(args, answer) => {
                     self.handle_vote_request(args, answer).await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
                 Event::VoteResponse(args) => {
                     self.handle_vote_response(args).await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
                 Event::LogRequest(args, answer) => {
                     self.handle_log_request(args, answer).await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
                 Event::LogResponse(args) => {
                     self.handle_log_response(args).await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
                 Event::Broadcast(payload) => {
                     self.handle_broadcast(payload).await;
+                    Self::persist_state(self.state.clone(), self.config.persister.clone()).await;
                 }
             }
         }
+    }
+
+    /// Any handler that modifies the states that are supposed to be persisted should call this function
+    async fn persist_state(state: NodeState, persister: Box<dyn Persister>) {
+        // TODO: Do we really need to persist the term and voted_for?
+        tokio::spawn(async move {
+            let persisted_state = PersistRaftState {
+                current_term: state.current_term,
+                voted_for: state.voted_for,
+                log: state.log.clone(),
+                commit_length: state.commit_length,
+            };
+            match persister.save_raft_state(&persisted_state).await {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Failed to persist state: {}", e);
+                }
+            }
+        });
     }
 
     async fn start_election(&mut self) {
@@ -373,7 +407,8 @@ impl RaftProtocol {
                 args.leader_commit,
                 args.suffix.clone(),
                 self.application_message_tx.clone(),
-            ).await;
+            )
+            .await;
             ack = args.prefix_len + args.suffix.len() as u64;
             success = true;
         }
@@ -407,8 +442,14 @@ impl RaftProtocol {
         }
         if leader_commit > state.commit_length {
             for i in state.commit_length..leader_commit {
-                application_message_tx.send(state.log[i as usize].payload.clone()).await.expect("application_message_tx closed");
-                debug!("deliver message in append_entries {:?}", state.log[i as usize].payload);
+                application_message_tx
+                    .send(state.log[i as usize].payload.clone())
+                    .await
+                    .expect("application_message_tx closed");
+                debug!(
+                    "deliver message in append_entries {:?}",
+                    state.log[i as usize].payload
+                );
             }
             state.commit_length = leader_commit;
         }
@@ -421,7 +462,8 @@ impl RaftProtocol {
             if args.success && args.ack > state.acked_length[args.follower as usize] {
                 state.sent_length[args.follower as usize] = args.ack;
                 state.acked_length[args.follower as usize] = args.ack;
-                Self::commit_log_entries(state, &self.config, self.application_message_tx.clone()).await;
+                Self::commit_log_entries(state, &self.config, self.application_message_tx.clone())
+                    .await;
             } else if state.sent_length[args.follower as usize] > 0 {
                 state.sent_length[args.follower as usize] -= 1;
                 let id = state.id;
@@ -460,9 +502,7 @@ impl RaftProtocol {
                 match state.current_leader {
                     Some(leader_id) => {
                         let msg = BroadcastArgs { payload };
-                        let success = peers
-                            .forward_broadcast(msg.clone(), leader_id)
-                            .await;
+                        let success = peers.forward_broadcast(msg.clone(), leader_id).await;
                         if !success {
                             // keep FIFO order
                             message_buffer.lock().await.push(msg.payload);
@@ -476,17 +516,21 @@ impl RaftProtocol {
         }
     }
 
-    async fn forward_to_new_leader(message_buffer: Arc<Mutex<Vec<Vec<u8>>>>, peers: Arc<RPCClients>, new_leader: u64) {
+    async fn forward_to_new_leader(
+        message_buffer: Arc<Mutex<Vec<Vec<u8>>>>,
+        peers: Arc<RPCClients>,
+        new_leader: u64,
+    ) {
         let mut message_buffer = message_buffer.lock().await;
         loop {
             let message = message_buffer.pop();
             if message.is_none() {
                 break;
             }
-            let msg = BroadcastArgs { payload: message.unwrap() };
-            let success = peers
-                .forward_broadcast(msg.clone(), new_leader)
-                .await;
+            let msg = BroadcastArgs {
+                payload: message.unwrap(),
+            };
+            let success = peers.forward_broadcast(msg.clone(), new_leader).await;
             if !success {
                 // keep FIFO order
                 message_buffer.insert(0, msg.payload);
@@ -495,7 +539,11 @@ impl RaftProtocol {
         }
     }
 
-    async fn commit_log_entries(state: &mut NodeState, config: &RaftConfig, application_message_tx: mpsc::Sender<Vec<u8>>) {
+    async fn commit_log_entries(
+        state: &mut NodeState,
+        config: &RaftConfig,
+        application_message_tx: mpsc::Sender<Vec<u8>>,
+    ) {
         let min_acks = ((config.peers.len() + 1) + 1) / 2;
         let mut ready_max = 0;
         // here is an optimization: we don't need to iterate through the whole log
@@ -509,11 +557,14 @@ impl RaftProtocol {
             && state.log[ready_max - 1].term == state.current_term
         {
             for i in state.commit_length as usize..ready_max {
-                    application_message_tx
+                application_message_tx
                     .send(state.log[i].payload.clone())
                     .await
                     .expect("application_message_tx closed");
-                debug!("deliver message in commit_log_entries {:?}", state.log[i].payload);
+                debug!(
+                    "deliver message in commit_log_entries {:?}",
+                    state.log[i].payload
+                );
             }
             state.commit_length = ready_max as u64;
         }

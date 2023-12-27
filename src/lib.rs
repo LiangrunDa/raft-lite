@@ -1,13 +1,15 @@
 pub mod config;
-mod network;
+pub mod persister;
 pub mod raft;
 mod raft_log;
+mod network;
 mod raft_protocol;
 mod timer;
 
 #[cfg(test)]
 mod tests {
     use crate::config::{RaftConfig, RaftParams};
+    use crate::persister::AsyncFilePersister;
     use crate::raft::Raft;
     use tracing::Level;
     use tracing_subscriber::prelude::*;
@@ -24,6 +26,7 @@ mod tests {
                 vec!["127.0.0.1:8080".to_string(), "127.0.0.1:8081".to_string()],
                 "127.0.0.1:8080".to_string(),
                 RaftParams::default(),
+                Box::new(AsyncFilePersister::default()),
             );
             let mut raft = Raft::new(config);
             let (mtx, mut mrx) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
