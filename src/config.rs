@@ -19,8 +19,8 @@ pub struct RaftParams {
 impl Default for RaftParams {
     fn default() -> Self {
         Self {
-            election_timeout: 300,
-            replicate_timeout: 150,
+            election_timeout: 1000,
+            replicate_timeout: 500,
         }
     }
 }
@@ -29,10 +29,10 @@ impl RaftConfig {
     pub fn new(mut peers: Vec<String>, self_ip: String, params: RaftParams) -> Self {
         peers.sort();
         // find the index of self_ip in peers, and use it as id
-        let idx = peers.binary_search(&self_ip).unwrap();
-        if idx >= peers.len() {
-            panic!("Self ip not found in peers!");
-        }
+        let idx = match peers.binary_search(&self_ip) {
+            Ok(idx) => idx,
+            Err(_) => panic!("Self ip not found in peers!"),
+        };
         let id = idx as u64;
         Self { peers, id, params }
     }

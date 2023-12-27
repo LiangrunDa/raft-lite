@@ -33,7 +33,7 @@ impl Raft {
             let rpc_server = start_server(&server_addr, event_tx.clone());
 
             // clients
-            let clients = RPCClients::new(config.clone());
+            let clients = RPCClients::new(config.clone(), event_tx.clone());
 
             // setup timers
             let (election_timer_reset_tx, mut election_timer_reset_rx) = mpsc::channel::<()>(1);

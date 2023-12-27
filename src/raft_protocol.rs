@@ -8,15 +8,17 @@ use crate::raft_log::LogEntry;
 use std::sync::Arc;
 use tarpc::serde;
 use tarpc::serde::ser::SerializeStruct;
-use tokio::sync::{mpsc, oneshot};
-use tracing::debug;
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tracing::{debug, trace};
 
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub(crate) enum Role {
     Follower,
     Candidate,
     Leader,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct NodeState {
     pub(crate) id: u64,
     pub(crate) current_term: u64,
@@ -92,7 +94,7 @@ pub(crate) enum Event {
 
 pub(crate) struct RaftProtocol {
     /// Raft-specific state
-    state: NodeState,
+    state: Arc<Mutex<NodeState>>,
     /// raft config for the cluster
     config: Arc<RaftConfig>,
     /// election timer
@@ -116,7 +118,7 @@ impl RaftProtocol {
         let id = config.id;
         Self {
             config,
-            state: NodeState::new(id),
+            state: Arc::new(Mutex::new(NodeState::new(id))),
             election_timer_reset_tx,
             replicate_timer_reset_tx,
             event_rx,
@@ -136,13 +138,13 @@ impl RaftProtocol {
                     self.replicate_log().await;
                 }
                 Event::VoteRequest(args, answer) => {
-                    self.handle_vote_request(args).await;
+                    self.handle_vote_request(args, answer).await;
                 }
                 Event::VoteResponse(args) => {
                     self.handle_vote_response(args).await;
                 }
                 Event::LogRequest(args, answer) => {
-                    self.handle_log_request(args).await;
+                    self.handle_log_request(args, answer).await;
                 }
                 Event::LogResponse(args) => {
                     self.handle_log_response(args).await;
@@ -155,22 +157,101 @@ impl RaftProtocol {
     }
 
     async fn start_election(&mut self) {
-        debug!("start election");
+        let mut state = self.state.lock().await;
+        if state.current_role == Role::Leader {
+            return;
+        }
+        let id = state.id;
+        state.current_term += 1;
+        state.voted_for = Some(id);
+        state.current_role = Role::Candidate;
+        state.votes_received.clear();
+        state.votes_received.push(id);
+
+        let mut last_term = 0;
+        if state.log.len() > 0 {
+            last_term = state.log.last().unwrap().term;
+        }
+
+        let msg = VoteRequestArgs {
+            cid: id,
+            cterm: state.current_term.clone(),
+            clog_length: state.log.len() as u64,
+            clog_term: last_term,
+        };
+
+        drop(state);
+
+        self.peers.vote_request(msg).await;
     }
 
     async fn replicate_log(&mut self) {
-        debug!("replicate log");
+        // trace!("replicate log");
     }
 
-    async fn handle_vote_request(&mut self, args: VoteRequestArgs) {
-        todo!()
+    async fn handle_vote_request(&mut self, args: VoteRequestArgs, answer: oneshot::Sender<VoteResponseArgs>) {
+        let mut state = self.state.lock().await;
+        trace!("received {:?} and current state is {:?}", args, state);
+        if args.cterm > state.current_term {
+            state.current_term = args.cterm;
+            state.current_role = Role::Follower;
+            state.voted_for = None;
+        }
+
+        let mut last_term = 0;
+        if state.log.len() > 0 {
+            last_term = state.log.last().unwrap().term;
+        }
+
+        let log_ok = args.clog_term > last_term
+            || (args.clog_term == last_term && args.clog_length >= state.log.len() as u64);
+
+        let mut granted = false;
+        if args.cterm == state.current_term && log_ok && (state.voted_for.is_none() || state.voted_for.unwrap() == args.cid) {
+            state.voted_for = Some(args.cid);
+            granted = true;
+        }
+
+        let msg = VoteResponseArgs {
+            voter_id: state.id,
+            term: state.current_term,
+            granted,
+        };
+        trace!("sent: {:?}", msg);
+
+        drop(state);
+
+        answer.send(msg).expect("VoteResponse channel closed");
     }
 
     async fn handle_vote_response(&mut self, args: VoteResponseArgs) {
-        todo!()
+        let mut state = self.state.lock().await;
+        trace!("received vote response and current state is {:?}", state);
+        if state.current_role == Role::Candidate && args.term == state.current_term && args.granted {
+            state.votes_received.push(args.voter_id);
+            trace!("votes received: {:?}", state.votes_received);
+            // rounded up
+            if state.votes_received.len() >= ((self.config.peers.len() + 1) + 1) / 2 {
+                state.current_role = Role::Leader;
+                state.current_leader = Some(state.id);
+                // TODO: cancel election timer
+                debug!("take over leadership with term {}", state.current_term);
+                // state.sent_length.clear();
+                // state.acked_length.clear();
+                // for _ in 0..self.config.peers.len() {
+                //     state.sent_length.push(0);
+                //     state.acked_length.push(0);
+                // }
+            }
+        } else if args.term > state.current_term {
+            state.current_term = args.term;
+            state.current_role = Role::Follower;
+            state.voted_for = None;
+            self.election_timer_reset_tx.send(()).await.expect("election_timer_reset_tx closed");
+        }
     }
 
-    async fn handle_log_request(&mut self, args: LogRequestArgs) {
+    async fn handle_log_request(&mut self, args: LogRequestArgs, answer: oneshot::Sender<LogResponseArgs>) {
         todo!()
     }
 
