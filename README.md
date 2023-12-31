@@ -43,7 +43,7 @@ async fn main() {
     // broadcast message to raft
     btx.send("hello".to_string().into_bytes()).await.unwrap();
     loop {
-        // receive message from application
+        // receive message from raft
         let message = mrx.recv().await.unwrap();
         println!("Received message from application: {:?}", message);
     }
