@@ -11,12 +11,10 @@ use crate::config::RaftConfig;
 use crate::network::RPCClients;
 use crate::persister::{PersistRaftState, Persister};
 use crate::raft_log::LogEntry;
-use futures::TryFutureExt;
 use std::cmp::min;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tarpc::serde;
-use tarpc::serde::ser::SerializeStruct;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, trace};
 
@@ -44,7 +42,9 @@ pub(crate) struct NodeState {
 impl NodeState {
     pub(crate) async fn new(id: u64, num_peers: usize, persister: Box<dyn Persister>) -> Self {
         let persisted_state = persister
-            .load_raft_state().await.unwrap_or_else(|_| PersistRaftState::default());
+            .load_raft_state()
+            .await
+            .unwrap_or_else(|_| PersistRaftState::default());
         let PersistRaftState {
             current_term,
             voted_for,
@@ -122,7 +122,7 @@ pub(crate) struct RaftProtocol {
     /// election timer
     election_timer_reset_tx: mpsc::Sender<()>,
     /// replicate timer
-    replicate_timer_reset_tx: mpsc::Sender<()>,
+    _replicate_timer_reset_tx: mpsc::Sender<()>,
     /// peers
     peers: RPCClients,
     /// Request channel
@@ -147,7 +147,7 @@ impl RaftProtocol {
             config: config.clone(),
             state: NodeState::new(id, config.peers.len(), config.persister).await,
             election_timer_reset_tx,
-            replicate_timer_reset_tx,
+            _replicate_timer_reset_tx: replicate_timer_reset_tx,
             event_rx,
             peers,
             application_message_tx,

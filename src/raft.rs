@@ -3,7 +3,6 @@ use crate::network::{start_server, RPCClients};
 use crate::raft_protocol::{Event, RaftProtocol};
 use crate::timer::start_timer;
 use crate::timer::Timer::{ElectionTimer, ReplicationTimer};
-use tarpc::server::Channel;
 use tokio::sync::mpsc;
 use tracing::{info, trace};
 
@@ -39,8 +38,8 @@ impl Raft {
             let clients = RPCClients::new(config.clone(), event_tx.clone());
 
             // setup timers
-            let (election_timer_reset_tx, mut election_timer_reset_rx) = mpsc::channel::<()>(1);
-            let (replicate_timer_reset_tx, mut replicate_timer_reset_rx) = mpsc::channel::<()>(1);
+            let (election_timer_reset_tx, election_timer_reset_rx) = mpsc::channel::<()>(1);
+            let (replicate_timer_reset_tx, replicate_timer_reset_rx) = mpsc::channel::<()>(1);
 
             // setup raft protocol
             let mut raft_protocol = RaftProtocol::new(
@@ -50,7 +49,8 @@ impl Raft {
                 replicate_timer_reset_tx,
                 clients,
                 application_message_tx,
-            ).await;
+            )
+            .await;
             let protocol = raft_protocol.run();
 
             // setup timers

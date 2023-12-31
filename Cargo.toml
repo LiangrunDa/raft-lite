@@ -1,7 +1,15 @@
 [package]
-name = "raft-rs"
+name = "raft-lite"
 version = "0.1.0"
 edition = "2021"
+authors = ["Liangrun Da <me@liangrunda.com>"]
+description = "A simple and understandable implementation of Raft consensus algorithm."
+readme = "README.md"
+repository = "https://github.com/liangrunda/raft-lite"
+license = "MIT"
+license-file = "LICENSE"
+keywords = ["raft", "consensus"]
+exclude = ["data/*"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

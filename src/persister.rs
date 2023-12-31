@@ -1,14 +1,14 @@
 use crate::raft_log::LogEntry;
 use anyhow::Error;
+use async_trait::async_trait;
+use dyn_clone::DynClone;
 use serde_json;
 use std::path::PathBuf;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use async_trait::async_trait;
-use dyn_clone::DynClone;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PersistRaftState {
+pub struct PersistRaftState {
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
     pub(crate) log: Vec<LogEntry>,
@@ -27,7 +27,7 @@ impl Default for PersistRaftState {
 }
 
 #[async_trait]
-pub trait Persister : DynClone + Send + Sync {
+pub trait Persister: DynClone + Send + Sync {
     async fn save_raft_state(&self, state: &PersistRaftState) -> Result<(), Error>;
     async fn load_raft_state(&self) -> Result<PersistRaftState, Error>;
 
