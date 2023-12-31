@@ -45,7 +45,7 @@ async fn main() {
     loop {
         // receive message from raft
         let message = mrx.recv().await.unwrap();
-        println!("Received message from application: {:?}", message);
+        println!("Received message from raft: {:?}", message);
     }
 }
 ```
