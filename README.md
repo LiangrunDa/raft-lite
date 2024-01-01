@@ -2,7 +2,7 @@
 
 Raft Lite is a very simple and understandable implementation of the Raft consensus algorithm. It is intended to be used as a learning tool for those who are interested in understanding how Raft works internally.
 
-The algorithm is implemented in a event-driven way, which is different from the original paper. The idea is borrowed from my master supervisor [Martin Kleppmann](https://martin.kleppmann.com/)'s course "Distributed Systems".
+The core logic is in `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. 
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -18,7 +18,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-raft-lite = "0.2.0"
+raft-lite = "0.2.1"
 ```
 
 To use it in your project, you can initialize a `Raft` instance with a `RaftConfig`. The way you interact with the Raft instance is to send messages to it and receive messages from it. The message type is `Vec<u8>`. The Raft protocol will guarantee the message delivery is in total order. 
