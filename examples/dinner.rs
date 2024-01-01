@@ -5,19 +5,29 @@ use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() {
-    let guests = vec!["localhost:10624".to_string(), "localhost:10625".to_string(), "localhost:10626".to_string()];
-    let dinner_options = ["Ratskeller", "Pizzeria Ristorante Lachoni", "KFC"];
+    let guests = vec![
+        "localhost:10624".to_string(),
+        "localhost:10625".to_string(),
+        "localhost:10626".to_string(),
+    ];
+    let dinner_options = vec![
+        b"Ratskeller".to_vec(),
+        b"Pizzeria Ristorante Lachoni".to_vec(),
+        b"KFC".to_vec(),
+    ];
 
     // spawn a raft instance for each guest
     for i in 0..guests.len() {
         let guests = guests.clone();
+        let dinner_options = dinner_options.clone();
         tokio::spawn(async move {
             let mut raft = get_raft_instance(guests.clone(), guests[i].clone());
             // one for broadcast, one for receive
             let (raft_broadcast_tx, mut raft_receive_rx) = raft.run();
 
             // send dinner option of this guest
-            raft_broadcast_tx.send(dinner_options[i].to_string().into_bytes()).await.unwrap();
+            let place = dinner_options[i].clone();
+            raft_broadcast_tx.send(place).await.unwrap();
 
             // receive dinner options of all guests
             let mut count = 0;
@@ -26,7 +36,8 @@ async fn main() {
                 count += 1;
                 if count == 2 {
                     // The last message is the final decision
-                    println!("Guest {}: Today we'll have dinner at {}!", i, String::from_utf8(msg).unwrap());
+                    let final_decision = String::from_utf8(msg).unwrap();
+                    println!("Guest {}: we'll have dinner at {}!", i, final_decision);
                 }
             }
         });
