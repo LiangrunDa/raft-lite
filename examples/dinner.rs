@@ -1,31 +1,3 @@
-# Raft Lite
-
-Raft Lite is a very simple and understandable implementation of the Raft consensus algorithm. It is intended to be used as a learning tool for those who are interested in understanding how Raft works internally.
-
-The algorithm is implemented in a event-driven way, which is different from the original paper. The idea is borrowed from my master supervisor [Martin Kleppmann](https://martin.kleppmann.com/)'s course "Distributed Systems".
-
-[![Crates.io][crates-badge]][crates-url]
-[![MIT licensed][mit-badge]][mit-url]
-
-[crates-badge]: https://img.shields.io/crates/v/raft-lite
-[crates-url]: https://crates.io/crates/raft-lite
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/LiangrunDa/raft-lite/blob/main/LICENSE
-
-## Usage
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-raft-lite = "0.1.0"
-```
-
-To use it in your project, you can initialize a `Raft` instance with a `RaftConfig`. The way you interact with the Raft instance is to send messages to it and receive messages from it. The message type is `Vec<u8>`. The Raft protocol will guarantee the message delivery is in total order. 
-
-The following example shows how to use Raft Lite to achieve a single value consensus. The example is in `examples/dinner.rs`.
-
-```rust
 use raft_lite::config::{RaftConfig, RaftParams};
 use raft_lite::persister::AsyncFilePersister;
 use raft_lite::raft::Raft;
@@ -72,12 +44,3 @@ fn get_raft_instance(peers: Vec<String>, self_addr: String) -> Raft {
     );
     Raft::new(raft_config)
 }
-```
-
-
-## License
-The project is under [MIT license](https://github.com/LiangrunDa/raft-lite/blob/main/LICENSE).
-
-## Related Projects
-TODO
-

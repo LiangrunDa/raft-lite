@@ -15,11 +15,10 @@ impl Raft {
         Self { config }
     }
 
-    pub fn run(
-        &mut self,
-        mut application_broadcast_rx: mpsc::Receiver<Vec<u8>>,
-        application_message_tx: mpsc::Sender<Vec<u8>>,
-    ) {
+    pub fn run(&mut self) -> (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) {
+        let (application_message_tx, application_message_rx) = mpsc::channel(100);
+        let (application_broadcast_tx, mut application_broadcast_rx) = mpsc::channel(100);
+
         let tokio_handle = tokio::runtime::Handle::try_current();
         if tokio_handle.is_err() {
             panic!("Tokio runtime is not ready!");
@@ -90,6 +89,7 @@ impl Raft {
                 broadcast_event_task
             );
         });
+        return (application_broadcast_tx, application_message_rx);
     }
 
     pub fn broadcast(&mut self) {}

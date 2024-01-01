@@ -1,0 +1,20 @@
+[package]
+name = "examples"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dev-dependencies]
+raft-lite = { path = "../" }
+tokio = { version = "1.0.0", features = ["full"] }
+bincode = "1.0.0"
+serde = { version = "1.0.0", features = ["derive"] }
+
+[[example]]
+name = "kv"
+path = "kv.rs"
+
+[[example]]
+name = "dinner"
+path = "dinner.rs"
+

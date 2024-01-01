@@ -1,6 +1,6 @@
 [package]
 name = "raft-lite"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Liangrun Da <me@liangrunda.com>"]
 description = "A simple and understandable implementation of Raft consensus algorithm."
@@ -27,3 +27,4 @@ futures = "0.3"
 rand = "0.8.5"
 async-trait = { version = "0.1.75", features = [] }
 dyn-clone = "1.0.16"
+bincode = "1.3.3"
