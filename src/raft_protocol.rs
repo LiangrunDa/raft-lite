@@ -547,13 +547,12 @@ impl RaftProtocol {
         let min_acks = ((config.peers.len() + 1) + 1) / 2;
         let mut ready_max = 0;
         // here is an optimization: we don't need to iterate through the whole log
-        for i in state.commit_length as usize..state.log.len() {
+        for i in state.commit_length as usize + 1..state.log.len() {
             if Self::acks(&state.acked_length, i as u64) >= min_acks as u64 {
                 ready_max = i + 1;
             }
         }
         if ready_max > 0
-            && ready_max > state.commit_length as usize
             && state.log[ready_max - 1].term == state.current_term
         {
             for i in state.commit_length as usize..ready_max {

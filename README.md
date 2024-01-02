@@ -4,6 +4,8 @@ Raft Lite is a very simple and understandable implementation of the Raft consens
 
 The core logic is in `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. 
 
+You can find detailed explanation of Raft Lite in [this blog post](https://liangrunda.com/posts/raft-lite/). 
+
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
 
