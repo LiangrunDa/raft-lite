@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+// use tracing_subscriber::fmt::Layer;
+// use tracing_subscriber::layer::SubscriberExt;
+// use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -14,8 +17,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|port| format!("localhost:{}", port))
         .collect::<Vec<String>>();
+    let random_int = rand::random::<u64>();
     for i in 0..peers.len() {
-        let path: PathBuf = PathBuf::from(format!("./data/raft_lite/{}", i));
+        let path: PathBuf = PathBuf::from(format!("./data/raft_lite/{}/{}", random_int, i));
         let mut kv = KVInstance::new(peers.clone(), i, path);
         tokio::spawn(async move {
             kv.set("greeting".to_string(), format!("hello world from {}", i))
@@ -29,8 +33,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 struct KVInstance {
     store: HashMap<String, String>,
-    raft_broadcast_tx: mpsc::Sender<Vec<u8>>,
-    raft_receive_rx: mpsc::Receiver<Vec<u8>>,
+    raft_broadcast_tx: mpsc::UnboundedSender<Vec<u8>>,
+    raft_receive_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     raft: Raft,
     index: usize,
 }
@@ -43,6 +47,13 @@ struct KVCommand {
 
 impl KVInstance {
     fn new(peers: Vec<String>, index: usize, path: PathBuf) -> Self {
+        // std::env::set_var("RUST_LOG", "raft_lite=debug");
+        // let subscriber = tracing_subscriber::registry()
+        //     .with(EnvFilter::from_default_env())
+        //     .with(Layer::new().with_writer(io::stderr));
+        //
+        // tracing::subscriber::set_global_default(subscriber);
+
         let config = RaftConfig::new(
             peers.clone(),
             peers[index].clone(),
@@ -77,6 +88,6 @@ impl KVInstance {
     async fn set(&mut self, key: String, value: String) {
         let cmd = KVCommand { key, value };
         let msg = bincode::serialize(&cmd).unwrap();
-        self.raft_broadcast_tx.send(msg).await.unwrap();
+        self.raft_broadcast_tx.send(msg).unwrap();
     }
 }

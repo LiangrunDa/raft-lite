@@ -7,13 +7,22 @@ use std::path::PathBuf;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Currently, we don't persist the commit_length. Reasons:
+/// 1. If the application doesn't consume the message, the application layer will lose the message if we persist the state.
+/// 2. If the application consumes the message before the state is persisted, the application layer will receive the message again.
+/// So the application must be tolerant to duplicate messages.
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistRaftState {
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
     pub(crate) log: Vec<LogEntry>,
-    pub(crate) commit_length: u64,
+    // pub(crate) commit_length: u64,
 }
+
+// TODO: compare the log with previous log, and only persist the new log entries.
+// Currently we don't persist the log entries, since it is too slow. It doesn't hurt the correctness, since we can assume the application will start from the beginning if the state is lost.
+// TODO: snapshot persister
 
 impl Default for PersistRaftState {
     fn default() -> Self {
@@ -21,7 +30,7 @@ impl Default for PersistRaftState {
             current_term: 0,
             voted_for: None,
             log: vec![],
-            commit_length: 0,
+            // commit_length: 0,
         }
     }
 }
@@ -30,8 +39,6 @@ impl Default for PersistRaftState {
 pub trait Persister: DynClone + Send + Sync {
     async fn save_raft_state(&self, state: &PersistRaftState) -> Result<(), Error>;
     async fn load_raft_state(&self) -> Result<PersistRaftState, Error>;
-
-    // TODO: snapshot peresister
 }
 
 // otherwise, we can't use Box<dyn Persister> in RaftConfig

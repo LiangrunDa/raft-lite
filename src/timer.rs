@@ -12,8 +12,8 @@ pub(crate) enum Timer {
 }
 
 pub(crate) async fn start_timer(
-    mut reset_rx: mpsc::Receiver<()>,
-    event_tx: mpsc::Sender<Event>,
+    mut reset_rx: mpsc::UnboundedReceiver<()>,
+    event_tx: mpsc::UnboundedSender<Event>,
     timeout: u64,
     timer: Timer,
 ) {
@@ -34,10 +34,10 @@ pub(crate) async fn start_timer(
             _ = time::sleep(Duration::from_millis(duration)) => {
                 match timer {
                     Timer::ElectionTimer => {
-                        event_tx.send(Event::ElectionTimeout).await.expect("event_tx closed");
+                        event_tx.send(Event::ElectionTimeout).expect("event_tx closed");
                     }
                     Timer::ReplicationTimer => {
-                        event_tx.send(Event::ReplicationTimeout).await.expect("event_tx closed");
+                        event_tx.send(Event::ReplicationTimeout).expect("event_tx closed");
                     }
                 }
             }

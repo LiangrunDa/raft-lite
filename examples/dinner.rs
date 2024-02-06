@@ -27,7 +27,7 @@ async fn main() {
 
             // send dinner option of this guest
             let place = dinner_options[i].clone();
-            raft_broadcast_tx.send(place).await.unwrap();
+            raft_broadcast_tx.send(place).unwrap();
 
             // receive dinner options of all guests
             let mut count = 0;

@@ -1,6 +1,6 @@
 [package]
 name = "raft-lite"
-version = "0.2.2"
+version = "0.2.4"
 edition = "2021"
 authors = ["Liangrun Da <me@liangrunda.com>"]
 description = "A simple and understandable implementation of Raft consensus algorithm."
@@ -22,7 +22,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 stubborn-io = "0.3"
 tracing-appender = "0.2.2"
-tracing-subscriber = "0.3.17"
+tracing-subscriber = { version = "0.3.17", features = [
+    "env-filter",
+    "fmt",
+    "ansi",
+    "std",
+    "registry",
+] }
 futures = "0.3"
 rand = "0.8.5"
 async-trait = { version = "0.1.75", features = [] }
