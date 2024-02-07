@@ -9,7 +9,7 @@ use tracing::debug;
 
 pub(crate) trait Runner {
     fn wait_for_event(&mut self) -> Option<Event>;
-    fn update_state(&mut self, state: NodeState);
+    fn update_state(&mut self, state: &NodeState);
     fn vote_request(&self, peer_id: u64, vote_request_args: VoteRequestArgs);
     fn log_request(&self, peer_id: u64, log_request_args: LogRequestArgs);
     fn forward_broadcast(&mut self, broadcast_args: BroadcastArgs);
@@ -60,8 +60,18 @@ impl Runner for RealRunner {
         self.event_rx.blocking_recv()
     }
 
-    fn update_state(&mut self, state: NodeState) {
-        self.state = state;
+    fn update_state(&mut self, state: &NodeState) {
+        // copy all fields except log
+        self.state.id = state.id;
+        self.state.current_term = state.current_term;
+        self.state.voted_for = state.voted_for;
+        self.state.commit_length = state.commit_length;
+        self.state.current_role = state.current_role.clone();
+        self.state.current_leader = state.current_leader;
+        self.state.votes_received = state.votes_received.clone();
+        self.state.sent_length = state.sent_length.clone();
+        self.state.acked_length = state.acked_length.clone();
+
         if let Some(peer_id) = self.state.current_leader {
             for message in self.message_buffer.drain(..) {
                 debug!(

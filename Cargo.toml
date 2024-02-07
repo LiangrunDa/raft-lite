@@ -1,6 +1,6 @@
 [package]
 name = "raft-lite"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 authors = ["Liangrun Da <me@liangrunda.com>"]
 description = "A simple and understandable implementation of Raft consensus algorithm."

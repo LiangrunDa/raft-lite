@@ -95,6 +95,7 @@ pub(crate) struct BroadcastArgs {
     pub(crate) payload: Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) enum Event {
     ElectionTimeout,
     ReplicationTimeout,
@@ -128,6 +129,7 @@ impl<T: Runner> RaftProtocol<T> {
         loop {
             let event = self.runner.wait_for_event();
             if let Some(event) = event {
+                debug!("received event: {:?}", event);
                 match event {
                     Event::ElectionTimeout => {
                         self.start_election();
@@ -151,7 +153,9 @@ impl<T: Runner> RaftProtocol<T> {
                         self.handle_broadcast(payload);
                     }
                 }
-                // self.runner.update_state(self.state.clone());
+                debug!("event handled, update state");
+                self.runner.update_state(&self.state);
+                debug!("state updated");
             } else {
                 trace!("event_rx closed, exit event loop");
                 break;
