@@ -21,6 +21,7 @@ pub(crate) struct NodeState {
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
     pub(crate) log: Vec<LogEntry>,
+    // TODO: snapshot: use a wrapper to keep the log and the snapshot_index
     pub(crate) commit_length: u64,
     pub(crate) current_role: Role,
     pub(crate) current_leader: Option<u64>,
@@ -150,7 +151,7 @@ impl<T: Runner> RaftProtocol<T> {
                         self.handle_broadcast(payload);
                     }
                 }
-                self.runner.update_state(self.state.clone());
+                // self.runner.update_state(self.state.clone());
             } else {
                 trace!("event_rx closed, exit event loop");
                 break;
