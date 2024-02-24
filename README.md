@@ -1,10 +1,10 @@
 # Raft Lite
 
-Raft Lite is a very simple and understandable implementation of the Raft consensus algorithm. It is intended to be used as a learning tool for those who are interested in understanding how Raft works internally.
+Raft Lite is an easy-to-understandable and formally verified implementation of the Raft consensus algorithm. It is intended to be used as a learning tool for those who are interested in understanding how Raft works internally.
 
-The core logic is in `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. 
+The Raft algorithm is implementedin `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. You can find the detailed explanation of this part in [this blog post](https://liangrunda.com/posts/raft-lite/).
 
-You can find detailed explanation of Raft Lite in [this blog post](https://liangrunda.com/posts/raft-lite/). 
+The model checking code is in `src/model_check.rs`. It uses [stateright](https://github.com/stateright/stateright), a model checker for distributed systems. You can find the detailed explanation of this part in [this blog post](https://liangrunda.com/posts/raft-lite-model-check/). 
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -14,13 +14,13 @@ You can find detailed explanation of Raft Lite in [this blog post](https://liang
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [mit-url]: https://github.com/LiangrunDa/raft-lite/blob/main/LICENSE
 
-## Usage
+## Use Raft Lite as a library
 
 Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-raft-lite = "0.2.2"
+raft-lite = "0.2.7"
 ```
 
 To use it in your project, you can initialize a `Raft` instance with a `RaftConfig`. The way you interact with the Raft instance is to send messages to it and receive messages from it. The message type is `Vec<u8>`. The Raft protocol will guarantee the message delivery is in total order. 
@@ -57,7 +57,7 @@ async fn main() {
 
             // send dinner option of this guest
             let place = dinner_options[i].clone();
-            raft_broadcast_tx.send(place).await.unwrap();
+            raft_broadcast_tx.send(place).unwrap();
 
             // receive dinner options of all guests
             let mut count = 0;
@@ -81,16 +81,64 @@ fn get_raft_instance(peers: Vec<String>, self_addr: String) -> Raft {
         peers.clone(),
         self_addr.clone(),
         RaftParams::default(),
-        Box::new(AsyncFilePersister::new(path)),
+        Some(path),
     );
     Raft::new(raft_config)
 }
 ```
 
+## Run model checking against Raft Lite
+
+### Run interactively
+
+You can run the model checking interactively by running the following command:
+
+```bash
+cargo run -- -m explore 
+```
+
+As shown in the following screenshot, the sequence diagram shows that two nodes are elected as leaders with different terms.
+
+![img.png](imgs/model-check-explore.png)
+
+### Run in command line
+
+You can also run the model checking in command line to find all possible states and transitions given a certain number of steps (depth).
+
+```bash
+cargo run -- -m check --depth 10
+```
+
+It will show all counterexamples that violate the specified `Always` properties and examples that satisfy the specified `Sometimes` properties.
+
+My laptop gives the following output in less than 1 second: 
+
+```shell
+$ cargo run -- -m check --depth 10
+Checking. states=4, unique=4, depth=1
+Checking. states=475674, unique=133824, depth=10
+Checking. states=917040, unique=256771, depth=10
+Done. states=924710, unique=259150, depth=10, sec=3
+Discovered "Election Liveness" example Path[3]:
+- Timeout(Id(0), ElectionTimeout)
+- Deliver { src: Id(0), dst: Id(1), msg: VoteRequest(VoteRequestArgs { cid: 0, cterm: 1, clog_length: 0, clog_term: 0 }) }
+- Deliver { src: Id(1), dst: Id(0), msg: VoteResponse(VoteResponseArgs { voter_id: 1, term: 1, granted: true }) }
+Fingerprint path: 13280538127433316798/18417327358524522001/10876327409151634344/11261648250825353397
+Discovered "Log Liveness" example Path[6]:
+- Timeout(Id(2), ElectionTimeout)
+- Deliver { src: Id(2), dst: Id(0), msg: VoteRequest(VoteRequestArgs { cid: 2, cterm: 1, clog_length: 0, clog_term: 0 }) }
+- Deliver { src: Id(0), dst: Id(2), msg: VoteResponse(VoteResponseArgs { voter_id: 0, term: 1, granted: true }) }
+- Deliver { src: Id(2), dst: Id(2), msg: Broadcast([50]) }
+- Deliver { src: Id(2), dst: Id(0), msg: LogRequest(LogRequestArgs { leader_id: 2, term: 1, prefix_len: 0, prefix_term: 0, leader_commit: 0, suffix: [LogEntry { term: 1, payload: [50] }] }) }
+- Deliver { src: Id(0), dst: Id(2), msg: LogResponse(LogResponseArgs { follower: 0, term: 1, ack: 1, success: true }) }
+Fingerprint path: 13280538127433316798/5012304960666992246/2656658050571602193/12788966706765998312/12610557528799436519/6208176474896103011/7212898540444505159
+
+```
 
 ## License
 The project is under [MIT license](https://github.com/LiangrunDa/raft-lite/blob/main/LICENSE).
 
 ## Related Projects
-TODO
+
+- [StorgataDB](https://github.com/LiangrunDa/StorgataDB): A distributed key-value store built on top of Raft Lite. 
 
