@@ -1,22 +1,25 @@
 /// Event loop implementation for Raft protocol
 use crate::config::RaftConfig;
-use crate::persister::{PersistRaftState, Persister};
+use crate::persister::PersistRaftState;
 use crate::raft_log::LogEntry;
-use crate::runner::Runner;
+use crate::runner::{CheckerRunner, RealRunner, Runner};
+use core::hash::Hash;
 use std::cmp::min;
 use std::collections::HashSet;
+use std::sync::Arc;
 use tarpc::serde;
 use tracing::{debug, trace};
+use std::fmt;
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub(crate) enum Role {
     Follower,
     Candidate,
     Leader,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct NodeState {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeState {
     pub(crate) id: u64,
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
@@ -30,17 +33,40 @@ pub(crate) struct NodeState {
     pub(crate) acked_length: Vec<u64>,
 }
 
+/// Hash is implemented for Stateright model checking
+impl Hash for NodeState {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.current_term.hash(state);
+        self.voted_for.hash(state);
+        self.log.hash(state);
+        self.commit_length.hash(state);
+        self.current_role.hash(state);
+        self.current_leader.hash(state);
+        // sort the votes_received to make sure the hash is deterministic
+        let mut votes_received: Vec<u64> = self.votes_received.iter().cloned().collect();
+        votes_received.sort();
+        votes_received.hash(state);
+        self.sent_length.hash(state);
+        self.acked_length.hash(state);
+    }
+}
+
 impl NodeState {
-    pub(crate) async fn new(id: u64, num_peers: usize, persister: Box<dyn Persister>) -> Self {
-        let persisted_state = persister
-            .load_raft_state()
-            .await
-            .unwrap_or_else(|_| PersistRaftState::default());
+    pub(crate) fn new(id: u64, num_peers: usize) -> Self {
+        let persisted_state = PersistRaftState::default();
+        Self::from_persisted_state(persisted_state, id, num_peers)
+    }
+
+    pub(crate) fn from_persisted_state(
+        persisted_state: PersistRaftState,
+        id: u64,
+        num_peers: usize,
+    ) -> NodeState {
         let PersistRaftState {
             current_term,
             voted_for,
             log,
-            // commit_length,
         } = persisted_state;
         Self {
             id,
@@ -57,8 +83,8 @@ impl NodeState {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct LogRequestArgs {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+pub struct LogRequestArgs {
     pub(crate) leader_id: u64,
     pub(crate) term: u64,
     pub(crate) prefix_len: u64,
@@ -67,35 +93,35 @@ pub(crate) struct LogRequestArgs {
     pub(crate) suffix: Vec<LogEntry>,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct LogResponseArgs {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+pub struct LogResponseArgs {
     pub(crate) follower: u64,
     pub(crate) term: u64,
     pub(crate) ack: u64,
     pub(crate) success: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct VoteRequestArgs {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+pub struct VoteRequestArgs {
     pub(crate) cid: u64,
     pub(crate) cterm: u64,
     pub(crate) clog_length: u64,
     pub(crate) clog_term: u64,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct VoteResponseArgs {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+pub struct VoteResponseArgs {
     pub(crate) voter_id: u64,
     pub(crate) term: u64,
     pub(crate) granted: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct BroadcastArgs {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
+pub struct BroadcastArgs {
     pub(crate) payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Event {
     ElectionTimeout,
     ReplicationTimeout,
@@ -106,17 +132,62 @@ pub(crate) enum Event {
     Broadcast(Vec<u8>),
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum StepOutput {
+    VoteRequest(u64, VoteRequestArgs),
+    VoteResponse(u64, VoteResponseArgs),
+    LogRequest(u64, LogRequestArgs),
+    LogResponse(u64, LogResponseArgs),
+    Broadcast(u64, Vec<u8>),
+    ElectionTimerReset,
+    ReplicateTimerReset,
+    DeliverMessage(Vec<u8>),
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub(crate) struct RaftProtocol<T: Runner> {
     /// Raft-specific state
-    state: NodeState,
+    pub(crate) state: NodeState,
     /// raft config for the cluster
     config: RaftConfig,
     /// runner on top of the raft protocol
     runner: T,
 }
 
+/// For interactive model checking
+impl fmt::Debug for RaftProtocol<CheckerRunner> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RaftProtocol")
+            .field("state", &self.state)
+            .field("runner", &self.runner)
+            .finish()
+    }
+}
+
+impl RaftProtocol<RealRunner> {
+    pub(crate) fn run(&mut self) {
+        // event loop
+        loop {
+            let event = self.runner.wait_for_event();
+            if let Some(event) = event {
+                self.dispatch_event(event);
+            } else {
+                trace!("event_rx closed, exit event loop");
+                break;
+            }
+        }
+    }
+}
+
+impl RaftProtocol<CheckerRunner> {
+    pub(crate) fn step(&mut self, event: Event) -> Vec<StepOutput> {
+        self.dispatch_event(event);
+        self.runner.collect_output()
+    }
+}
+
 impl<T: Runner> RaftProtocol<T> {
-    pub(crate) fn new(config: RaftConfig, runner: T) -> Self {
+    pub(crate) fn new(config: RaftConfig, mut runner: T) -> Self {
         Self {
             config: config.clone(),
             state: runner.init_state(),
@@ -124,41 +195,29 @@ impl<T: Runner> RaftProtocol<T> {
         }
     }
 
-    pub(crate) fn run(&mut self) {
-        // event loop
-        loop {
-            let event = self.runner.wait_for_event();
-            if let Some(event) = event {
-                debug!("received event: {:?}", event);
-                match event {
-                    Event::ElectionTimeout => {
-                        self.start_election();
-                    }
-                    Event::ReplicationTimeout => {
-                        self.handle_replicate_log();
-                    }
-                    Event::VoteRequest(args) => {
-                        self.handle_vote_request(args);
-                    }
-                    Event::VoteResponse(args) => {
-                        self.handle_vote_response(args);
-                    }
-                    Event::LogRequest(args) => {
-                        self.handle_log_request(args);
-                    }
-                    Event::LogResponse(args) => {
-                        self.handle_log_response(args);
-                    }
-                    Event::Broadcast(payload) => {
-                        self.handle_broadcast(payload);
-                    }
-                }
-                debug!("event handled, update state");
-                self.runner.update_state(&self.state);
-                debug!("state updated");
-            } else {
-                trace!("event_rx closed, exit event loop");
-                break;
+    fn dispatch_event(&mut self, event: Event) {
+        debug!("dispatch event: {:?}", event);
+        match event {
+            Event::ElectionTimeout => {
+                self.start_election();
+            }
+            Event::ReplicationTimeout => {
+                self.handle_replicate_log();
+            }
+            Event::VoteRequest(args) => {
+                self.handle_vote_request(args);
+            }
+            Event::VoteResponse(args) => {
+                self.handle_vote_response(args);
+            }
+            Event::LogRequest(args) => {
+                self.handle_log_request(args);
+            }
+            Event::LogResponse(args) => {
+                self.handle_log_response(args);
+            }
+            Event::Broadcast(payload) => {
+                self.handle_broadcast(payload);
             }
         }
     }
@@ -170,7 +229,9 @@ impl<T: Runner> RaftProtocol<T> {
         }
         let id = state.id;
         state.current_term += 1;
+        self.runner.change_term(state.current_term);
         state.voted_for = Some(id);
+        self.runner.change_voted_for(Some(id));
         state.current_role = Role::Candidate;
         state.votes_received.clear();
         state.votes_received.insert(id);
@@ -234,8 +295,10 @@ impl<T: Runner> RaftProtocol<T> {
         trace!("received {:?} and current state is {:?}", args, state);
         if args.cterm > state.current_term {
             state.current_term = args.cterm;
+            self.runner.change_term(state.current_term);
             state.current_role = Role::Follower;
             state.voted_for = None;
+            self.runner.change_voted_for(None);
         }
 
         let mut last_term = 0;
@@ -252,6 +315,7 @@ impl<T: Runner> RaftProtocol<T> {
             && (state.voted_for.is_none() || state.voted_for.unwrap() == args.cid)
         {
             state.voted_for = Some(args.cid);
+            self.runner.change_voted_for(Some(args.cid));
             granted = true;
         }
 
@@ -275,6 +339,7 @@ impl<T: Runner> RaftProtocol<T> {
             if state.votes_received.len() >= ((self.config.peers.len() + 1) + 1) / 2 {
                 state.current_role = Role::Leader;
                 state.current_leader = Some(state.id);
+                self.runner.change_current_leader(state.current_leader);
                 // TODO: cancel election timer
                 debug!(
                     "{} take over leadership with term {}",
@@ -291,8 +356,10 @@ impl<T: Runner> RaftProtocol<T> {
             }
         } else if args.term > state.current_term {
             state.current_term = args.term;
+            self.runner.change_term(state.current_term);
             state.current_role = Role::Follower;
             state.voted_for = None;
+            self.runner.change_voted_for(None);
             self.runner.election_timer_reset();
         }
     }
@@ -302,12 +369,15 @@ impl<T: Runner> RaftProtocol<T> {
         trace!("received log request and current state is {:?}", state);
         if args.term > state.current_term {
             state.current_term = args.term;
+            self.runner.change_term(state.current_term);
             state.voted_for = None;
+            self.runner.change_voted_for(None);
             self.runner.election_timer_reset();
         }
         if args.term == state.current_term {
             state.current_role = Role::Follower;
             state.current_leader = Some(args.leader_id);
+            self.runner.change_current_leader(state.current_leader);
             self.runner.election_timer_reset();
         }
         let log_ok = (state.log.len() >= args.prefix_len as usize)
@@ -350,17 +420,21 @@ impl<T: Runner> RaftProtocol<T> {
         if suffix.len() > 0 && state.log.len() > prefix_len as usize {
             let index = min(state.log.len(), prefix_len as usize + suffix.len()) - 1;
             if state.log[index].term != suffix[index - prefix_len as usize].term {
-                state.log = state.log[..prefix_len as usize].to_vec();
+                // state.log = state.log[..prefix_len as usize].to_vec();
+                // below is an optimization
+                state.log.truncate(prefix_len as usize);
+                runner.truncate_logs(prefix_len as usize);
             }
         }
         if prefix_len as usize + suffix.len() > state.log.len() {
             for i in state.log.len() - prefix_len as usize..suffix.len() {
                 state.log.push(suffix[i].clone());
+                runner.append_log(suffix[i].clone());
             }
         }
         if leader_commit > state.commit_length {
             for i in state.commit_length..leader_commit {
-                runner.deliver_message(state.log[i as usize].payload.clone());
+                runner.deliver_message(state.log[i as usize].payload.to_vec());
             }
             state.commit_length = leader_commit;
         }
@@ -383,8 +457,10 @@ impl<T: Runner> RaftProtocol<T> {
             }
         } else if args.term > state.current_term {
             state.current_term = args.term;
+            self.runner.change_term(state.current_term);
             state.current_role = Role::Follower;
             state.voted_for = None;
+            self.runner.change_voted_for(None);
             self.runner.election_timer_reset();
         }
     }
@@ -394,10 +470,11 @@ impl<T: Runner> RaftProtocol<T> {
         if state.current_role == Role::Leader {
             let entry = LogEntry {
                 term: state.current_term,
-                payload,
+                payload: Arc::new(payload),
             };
             debug!("leader {} append log entry: {:?}", state.id, entry);
-            state.log.push(entry);
+            state.log.push(entry.clone());
+            self.runner.append_log(entry.clone());
             let id = state.id as usize;
             state.acked_length[id] = state.log.len() as u64;
             self.handle_replicate_log();
@@ -418,7 +495,7 @@ impl<T: Runner> RaftProtocol<T> {
         debug!("leader {} ready_max: {}", state.id, ready_max);
         if ready_max > 0 && state.log[ready_max - 1].term == state.current_term {
             for i in state.commit_length as usize..ready_max {
-                runner.deliver_message(state.log[i].payload.clone());
+                runner.deliver_message(state.log[i].payload.to_vec());
             }
             state.commit_length = ready_max as u64;
         }

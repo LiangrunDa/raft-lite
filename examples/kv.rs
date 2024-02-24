@@ -1,11 +1,11 @@
 use raft_lite::config::{RaftConfig, RaftParams};
-use raft_lite::persister::AsyncFilePersister;
 use raft_lite::raft::Raft;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+// use std::io;
 // use tracing_subscriber::fmt::Layer;
 // use tracing_subscriber::layer::SubscriberExt;
 // use tracing_subscriber::EnvFilter;
@@ -47,7 +47,7 @@ struct KVCommand {
 
 impl KVInstance {
     fn new(peers: Vec<String>, index: usize, path: PathBuf) -> Self {
-        // std::env::set_var("RUST_LOG", "raft_lite=debug");
+        // std::env::set_var("RUST_LOG", "raft_lite=info");
         // let subscriber = tracing_subscriber::registry()
         //     .with(EnvFilter::from_default_env())
         //     .with(Layer::new().with_writer(io::stderr));
@@ -58,7 +58,7 @@ impl KVInstance {
             peers.clone(),
             peers[index].clone(),
             RaftParams::default(),
-            Box::new(AsyncFilePersister::new(path)),
+            Some(path),
         );
         let mut raft = Raft::new(config);
         let (raft_broadcast_tx, raft_receive_rx) = raft.run();

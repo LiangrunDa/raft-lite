@@ -1,10 +1,20 @@
 use raft_lite::config::{RaftConfig, RaftParams};
-use raft_lite::persister::AsyncFilePersister;
 use raft_lite::raft::Raft;
 use std::path::PathBuf;
+// use std::io;
+// use tracing_subscriber::fmt::Layer;
+// use tracing_subscriber::layer::SubscriberExt;
+// use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    // std::env::set_var("RUST_LOG", "raft_lite=info");
+    // let subscriber = tracing_subscriber::registry()
+    //     .with(EnvFilter::from_default_env())
+    //     .with(Layer::new().with_writer(io::stderr));
+    //
+    // tracing::subscriber::set_global_default(subscriber);
+
     let guests = vec![
         "localhost:10624".to_string(),
         "localhost:10625".to_string(),
@@ -51,7 +61,7 @@ fn get_raft_instance(peers: Vec<String>, self_addr: String) -> Raft {
         peers.clone(),
         self_addr.clone(),
         RaftParams::default(),
-        Box::new(AsyncFilePersister::new(path)),
+        Some(path),
     );
     Raft::new(raft_config)
 }

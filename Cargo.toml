@@ -34,3 +34,16 @@ rand = "0.8.5"
 async-trait = { version = "0.1.75", features = [] }
 dyn-clone = "1.0.16"
 bincode = "1.3.3"
+stateright = "0.30.1"
+num_cpus = "1.16.0"
+clap = { version = "4.2.5", features = ["derive", "env"] }
+crc= { version = "3.0.1" }
+
+
+[lib]
+name = "raft_lite"
+path = "src/lib.rs"
+
+[[bin]]
+name = "checker"
+path = "src/main.rs"

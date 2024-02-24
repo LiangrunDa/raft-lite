@@ -1,6 +1,6 @@
 use crate::config::RaftConfig;
 use crate::network::{start_server, RPCClients};
-use crate::raft_protocol::NodeState;
+use crate::raft_log::LogManager;
 use crate::raft_protocol::{Event, RaftProtocol};
 use crate::runner::RealRunner;
 use crate::timer::start_timer;
@@ -46,8 +46,6 @@ impl Raft {
             // setup timers
             let (election_timer_reset_tx, election_timer_reset_rx) = mpsc::unbounded_channel();
             let (replicate_timer_reset_tx, replicate_timer_reset_rx) = mpsc::unbounded_channel();
-
-            // setup timers
             let election_timer = start_timer(
                 election_timer_reset_rx,
                 event_tx.clone(),
@@ -61,7 +59,7 @@ impl Raft {
                 ReplicationTimer,
             );
 
-            // define an async task to broadcast application messages
+            // an async task to broadcast application messages
             let broadcast_event_task = async move {
                 loop {
                     let msg = application_broadcast_rx
@@ -75,19 +73,24 @@ impl Raft {
                 }
             };
 
-            let config_runner = config.clone();
-            let state = NodeState::new(
-                config_runner.id,
-                config_runner.peers.len(),
-                config_runner.persister,
-            )
-            .await;
+            let (log_manager_tx, log_manager_rx) = mpsc::unbounded_channel();
+            let mut persister =
+                crate::persister::Persister::new(config.get_persister_path(), log_manager_tx);
+            let mut log_manager = LogManager::new(config.get_persister_path())
+                .await
+                .expect("Failed to create disk manager");
+            let logs = log_manager
+                .initialize()
+                .await
+                .expect("Failed to initialize disk manager");
+            persister.set_logs(logs);
+            let log_manager_task = log_manager.run(log_manager_rx);
 
             // setup raft runner
             tokio::task::spawn_blocking(move || {
                 let runner = RealRunner::new(
                     config.clone(),
-                    state,
+                    persister,
                     event_rx,
                     clients,
                     election_timer_reset_tx.clone(),
@@ -102,7 +105,8 @@ impl Raft {
                 rpc_server,
                 election_timer,
                 replication_timer,
-                broadcast_event_task
+                broadcast_event_task,
+                log_manager_task
             );
         });
         (application_broadcast_tx, application_message_rx)

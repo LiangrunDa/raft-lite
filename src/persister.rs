@@ -1,27 +1,19 @@
-use crate::raft_log::LogEntry;
+use crate::raft_log::{LogEntry, LogManagerCommand};
 use anyhow::Error;
-use async_trait::async_trait;
-use dyn_clone::DynClone;
-use serde_json;
+use core::hash::Hash;
+use std::fs::{File, OpenOptions};
+use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-/// Currently, we don't persist the commit_length. Reasons:
-/// 1. If the application doesn't consume the message, the application layer will lose the message if we persist the state.
-/// 2. If the application consumes the message before the state is persisted, the application layer will receive the message again.
-/// So the application must be tolerant to duplicate messages.
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistRaftState {
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
     pub(crate) log: Vec<LogEntry>,
-    // pub(crate) commit_length: u64,
 }
 
-// TODO: compare the log with previous log, and only persist the new log entries.
-// Currently we don't persist the log entries, since it is too slow. It doesn't hurt the correctness, since we can assume the application will start from the beginning if the state is lost.
 // TODO: snapshot persister
 
 impl Default for PersistRaftState {
@@ -30,73 +22,129 @@ impl Default for PersistRaftState {
             current_term: 0,
             voted_for: None,
             log: vec![],
-            // commit_length: 0,
         }
     }
 }
 
-#[async_trait]
-pub trait Persister: DynClone + Send + Sync {
-    async fn save_raft_state(&self, state: &PersistRaftState) -> Result<(), Error>;
-    async fn load_raft_state(&self) -> Result<PersistRaftState, Error>;
-}
-
-// otherwise, we can't use Box<dyn Persister> in RaftConfig
-dyn_clone::clone_trait_object!(Persister);
-
-trait ClonePersister {
-    fn clone_persister<'a>(&self) -> Box<dyn Persister>;
-}
-
-#[derive(Clone)]
-pub struct AsyncFilePersister {
+#[derive(Clone, Debug)]
+pub struct Persister {
     path: PathBuf,
+    logs: Vec<LogEntry>,
+    log_manager_tx: mpsc::UnboundedSender<LogManagerCommand>,
 }
 
-#[async_trait]
-impl Persister for AsyncFilePersister {
-    async fn save_raft_state(&self, state: &PersistRaftState) -> Result<(), Error> {
-        let serialized_state = serde_json::to_string(state)?;
+impl PartialEq for Persister {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
 
-        // Create directories if they don't exist
-        if let Some(parent) = std::path::Path::new(&self.path).parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)?;
-            }
+impl Hash for Persister {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+    }
+}
+
+/// We need to persist the term and voted_for in a synchronous way (persisted before sending VoteResponse),
+/// otherwise a node may vote for two different candidates in the same term.
+/// However, we can persist the log in an asynchronous way, because it doesn't affect the correctness of the protocol.
+/// Currently, we don't persist the commit_length. Reasons:
+/// 1. If the application doesn't consume the message, the application layer will lose the message if we persist the state.
+/// 2. If the application consumes the message before the state is persisted, the application layer will receive the message again.
+/// So the application must handle the message idempotently.
+
+impl Persister {
+    pub fn new(path: PathBuf, log_manager_tx: mpsc::UnboundedSender<LogManagerCommand>) -> Self {
+        Self {
+            path,
+            log_manager_tx,
+            logs: vec![],
         }
+    }
 
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-
-        let mut file = options.open(&self.path).await?;
-        file.write_all(serialized_state.as_bytes()).await?;
-
+    pub(crate) fn persist_term(&self, term: u64) -> Result<(), Error> {
+        // create the directory if not exists
+        if !self.path.exists() {
+            std::fs::create_dir_all(&self.path)?;
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(self.path.join("term"))?;
+        file.write_all(term.to_string().as_bytes())?;
+        file.sync_all()?; // flush the file to disk
         Ok(())
     }
 
-    async fn load_raft_state(&self) -> Result<PersistRaftState, Error> {
+    fn load_term(&self) -> Result<u64, Error> {
+        let mut file = File::open(self.path.join("term"))?;
+        let mut buffer = vec![];
+        file.read_to_end(&mut buffer)?;
+        let term = String::from_utf8(buffer)?;
+        Ok(term.parse()?)
+    }
+
+    pub(crate) fn persist_voted_for(&self, voted_for: Option<u64>) -> Result<(), Error> {
         if !self.path.exists() {
-            return Err(Error::msg("Persister file does not exist"));
+            std::fs::create_dir_all(&self.path)?;
         }
-
-        let mut file = File::open(&self.path).await?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).await?;
-
-        let deserialized_state: PersistRaftState = serde_json::from_slice(&buffer)?;
-
-        Ok(deserialized_state)
+        // create a new file if it exists
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(self.path.join("voted_for"))?;
+        let bytes = match voted_for {
+            Some(value) => value.to_le_bytes().to_vec(),
+            None => vec![],
+        };
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
     }
-}
 
-impl AsyncFilePersister {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
+    fn load_voted_for(&self) -> Result<Option<u64>, Error> {
+        let mut file = File::open(self.path.join("voted_for"))?;
+        let mut buffer = vec![];
+        file.read_to_end(&mut buffer)?;
+        let voted_for = if buffer.is_empty() {
+            None
+        } else {
+            Some(u64::from_le_bytes(
+                buffer[..std::mem::size_of::<u64>()].try_into().unwrap(),
+            ))
+        };
+        Ok(voted_for)
     }
-}
 
-impl Default for AsyncFilePersister {
-    fn default() -> Self {
-        Self::new(PathBuf::from("./data/raft_storage"))
+    pub(crate) fn load_from_disk(&mut self) -> Result<PersistRaftState, Error> {
+        let term = self.load_term()?;
+        let voted_for = self.load_voted_for()?;
+        // println!("load voted_for: {:?}", voted_for);
+        // memtake
+        let log = std::mem::take(&mut self.logs);
+        Ok(PersistRaftState {
+            current_term: term,
+            voted_for,
+            log,
+        })
+    }
+
+    pub(crate) fn truncate_disk_log(&self, index: usize) {
+        let truncate_command = LogManagerCommand::Truncate(index);
+        self.log_manager_tx
+            .send(truncate_command)
+            .expect("log manager channel closed");
+    }
+
+    pub(crate) fn append_disk_log(&self, entry: LogEntry) {
+        let append_command = LogManagerCommand::Append(entry);
+        self.log_manager_tx
+            .send(append_command)
+            .expect("log manager channel closed");
+    }
+
+    pub(crate) fn set_logs(&mut self, logs: Vec<LogEntry>) {
+        // maybe another way to do this?
+        self.logs = logs;
     }
 }
