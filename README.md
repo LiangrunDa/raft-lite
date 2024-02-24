@@ -2,7 +2,7 @@
 
 Raft Lite is an easy-to-understandable and formally verified implementation of the Raft consensus algorithm. It is intended to be used as a learning tool for those who are interested in understanding how Raft works internally.
 
-The Raft algorithm is implementedin `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. You can find the detailed explanation of this part in [this blog post](https://liangrunda.com/posts/raft-lite/).
+The Raft algorithm is implemented in `src/raft_protocol.rs`, which is a event loop that handles all the application requests, Raft protocol messages and timer events. You can find the detailed explanation of this part in [this blog post](https://liangrunda.com/posts/raft-lite/).
 
 The model checking code is in `src/model_check.rs`. It uses [stateright](https://github.com/stateright/stateright), a model checker for distributed systems. You can find the detailed explanation of this part in [this blog post](https://liangrunda.com/posts/raft-lite-model-check/). 
 
