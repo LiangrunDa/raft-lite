@@ -23,7 +23,7 @@ pub struct NodeState {
     pub(crate) id: u64,
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
-    pub(crate) log: Vec<LogEntry>,
+    pub(crate) log: Vec<Arc<LogEntry>>,
     // TODO: snapshot: use a wrapper to keep the log and the snapshot_index
     pub(crate) commit_length: u64,
     pub(crate) current_role: Role,
@@ -90,7 +90,7 @@ pub struct LogRequestArgs {
     pub(crate) prefix_len: u64,
     pub(crate) prefix_term: u64,
     pub(crate) leader_commit: u64,
-    pub(crate) suffix: Vec<LogEntry>,
+    pub(crate) suffix: Vec<Arc<LogEntry>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq)]
@@ -413,7 +413,7 @@ impl<T: Runner> RaftProtocol<T> {
         state: &mut NodeState,
         prefix_len: u64,
         leader_commit: u64,
-        suffix: Vec<LogEntry>,
+        suffix: Vec<Arc<LogEntry>>,
         runner: &mut T,
     ) {
         debug!("follower {} append entries: {:?}", state.id, suffix);
@@ -468,10 +468,10 @@ impl<T: Runner> RaftProtocol<T> {
     fn handle_broadcast(&mut self, payload: Vec<u8>) {
         let state = &mut self.state;
         if state.current_role == Role::Leader {
-            let entry = LogEntry {
+            let entry = Arc::new(LogEntry {
                 term: state.current_term,
-                payload: Arc::new(payload),
-            };
+                payload,
+            });
             debug!("leader {} append log entry: {:?}", state.id, entry);
             state.log.push(entry.clone());
             self.runner.append_log(entry.clone());

@@ -6,12 +6,13 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistRaftState {
     pub(crate) current_term: u64,
     pub(crate) voted_for: Option<u64>,
-    pub(crate) log: Vec<LogEntry>,
+    pub(crate) log: Vec<Arc<LogEntry>>,
 }
 
 // TODO: snapshot persister
@@ -29,7 +30,7 @@ impl Default for PersistRaftState {
 #[derive(Clone, Debug)]
 pub struct Persister {
     path: PathBuf,
-    logs: Vec<LogEntry>,
+    logs: Vec<Arc<LogEntry>>,
     log_manager_tx: mpsc::UnboundedSender<LogManagerCommand>,
 }
 
@@ -136,14 +137,14 @@ impl Persister {
             .expect("log manager channel closed");
     }
 
-    pub(crate) fn append_disk_log(&self, entry: LogEntry) {
+    pub(crate) fn append_disk_log(&self, entry: Arc<LogEntry>) {
         let append_command = LogManagerCommand::Append(entry);
         self.log_manager_tx
             .send(append_command)
             .expect("log manager channel closed");
     }
 
-    pub(crate) fn set_logs(&mut self, logs: Vec<LogEntry>) {
+    pub(crate) fn set_logs(&mut self, logs: Vec<Arc<LogEntry>>) {
         // maybe another way to do this?
         self.logs = logs;
     }

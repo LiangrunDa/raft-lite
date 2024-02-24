@@ -17,7 +17,7 @@ pub(crate) type ByteSize = u64;
 #[warn(private_interfaces)]
 pub struct LogEntry {
     pub(crate) term: u64,
-    pub(crate) payload: Arc<Vec<u8>>,
+    pub(crate) payload: Vec<u8>,
 }
 
 /// Index for fast truncation
@@ -39,7 +39,7 @@ pub(crate) struct DiskLogEntry {
 }
 
 impl DiskLogEntry {
-    pub(crate) fn new_entry(entry: LogEntry) -> Self {
+    pub(crate) fn new_entry(entry: Arc<LogEntry>) -> Self {
         let payload = entry.payload.to_vec();
         let check_sum = CRC32.checksum(&payload);
         Self {
@@ -119,7 +119,7 @@ pub(crate) struct LogManager {
 
 #[derive(Debug)]
 pub enum LogManagerCommand {
-    Append(LogEntry),
+    Append(Arc<LogEntry>),
     Truncate(usize),
 }
 
@@ -141,7 +141,7 @@ impl LogManager {
         })
     }
 
-    pub(crate) async fn initialize(&mut self) -> anyhow::Result<Vec<LogEntry>> {
+    pub(crate) async fn initialize(&mut self) -> anyhow::Result<Vec<Arc<LogEntry>>> {
         let mut cursor = 0u64;
         let file_size = self.log_file.metadata().await?.len();
         let mut result = vec![];
@@ -154,10 +154,10 @@ impl LogManager {
                 break;
             }
             let entry = DiskLogEntry::deserialize(&mut buffered_reader).await?;
-            result.push(LogEntry {
+            result.push(Arc::new(LogEntry {
                 term: entry.term,
-                payload: Arc::new(entry.payload.clone()),
-            });
+                payload: entry.payload.clone(),
+            }));
             let entry_size = entry.payload.len() as u64;
             self.log_index.push(DiskLogIndex {
                 offset: cursor,
@@ -172,7 +172,7 @@ impl LogManager {
         Ok(result)
     }
 
-    pub(crate) async fn append(&mut self, entry: LogEntry) -> anyhow::Result<()> {
+    pub(crate) async fn append(&mut self, entry: Arc<LogEntry>) -> anyhow::Result<()> {
         let disk_entry = DiskLogEntry::new_entry(entry);
         // println!("disk_entry: {:?}", disk_entry);
 

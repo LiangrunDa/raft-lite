@@ -9,6 +9,7 @@ use crate::raft_protocol::{
 use tokio::sync::mpsc;
 use std::fmt;
 use tracing::debug;
+use std::sync::Arc;
 
 pub trait Runner {
     fn init_state(&mut self) -> NodeState;
@@ -21,7 +22,7 @@ pub trait Runner {
     fn replicate_timer_reset(&mut self);
     fn deliver_message(&mut self, message: Vec<u8>);
     fn truncate_logs(&mut self, index: usize);
-    fn append_log(&mut self, entry: LogEntry);
+    fn append_log(&mut self, entry: Arc<LogEntry>);
     fn change_term(&mut self, term: u64);
     fn change_voted_for(&mut self, voted_for: Option<u64>);
     fn change_current_leader(&mut self, leader: Option<u64>);
@@ -86,7 +87,7 @@ impl Runner for RealRunner {
         self.persister.truncate_disk_log(index);
     }
 
-    fn append_log(&mut self, entry: LogEntry) {
+    fn append_log(&mut self, entry: Arc<LogEntry>) {
         self.persister.append_disk_log(entry);
     }
 
@@ -223,7 +224,7 @@ impl Runner for CheckerRunner {
         // do nothing, because stateright doesn't support stop-recovery model
     }
 
-    fn append_log(&mut self, _entry: LogEntry) {
+    fn append_log(&mut self, _entry: Arc<LogEntry>) {
         // do nothing because stateright doesn't support stop-recovery model
     }
 
